@@ -1,4 +1,16 @@
-#pragma once
+// ============================================================================
+// MemoryCPP - High Performance Arena Allocator & Memory Utility Library
+// ----------------------------------------------------------------------------
+// File:        memory_units.h
+// Author:      Jason Penick
+// Website:     630Studios.com
+// Created:     2026
+//
+// Copyright (c) 2026 Jason Penick. All rights reserved.
+//
+// This software is provided under the terms outlined in LICENSE.txt
+// See README.md for full documentation and usage examples
+// ============================================================================
 
 
 #pragma once
