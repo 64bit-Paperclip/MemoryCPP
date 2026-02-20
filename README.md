@@ -38,7 +38,7 @@ Standard allocators scatter objects across the heap, causing cache misses, TLB p
 ### Default 8-Byte Alignment
 `TakeSlice` enforces 8-byte alignment on every allocation:
 
-$$alignedReq = (sizeInBytes + 7) \& \sim 7$$
+`alignedReq = (sizeInBytes + 7) &~ 7`
 
 This ensures every allocation is cache-ready, avoids unaligned access penalties. For stricter alignment requirements (e.g. 16-byte SIMD), use `TakeAlignedSlice`.
 
