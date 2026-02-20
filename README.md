@@ -1,103 +1,106 @@
 
 # MemoryManagerCPP
 
-A modular, owner-based memory pool system for C++ that focuses on deterministic resource management. Designed to be lightweight, efficient, and high-performance with zero-allocation overhead after initialization. Provides ultra-fast bump allocation with an emphasis on cache coherency and hardware prefetcher optimization.
+A high-performance C++ memory utility library and arena allocator with zero STL dependencies. Built around O(1) bump allocation and a rich slice type covering typed access, bit manipulation, sub-slicing, overlap detection, and raw copy utilities. Includes fixed and dynamic pool managers for full lifecycle control.
 
----
+## Class Overview
 
-## Key Features
+Each class in this library is designed to be useful on its own, not just as part of the full stack.
 
-* **Zero External Dependencies / No-STL:** This library does not pull in heavy headers like `<vector>` or `<memory>`, keeping binary bloat to a minimum and ensuring lightning-fast compile times. It uses strictly `<malloc.h>` for initial memory reservations and `<assert.h>` for asserts.
-* **Zero Runtime Allocation:** Once initialized, the system requires no further interaction with the OS heap. This prevents heap fragmentation and ensures your application's memory footprint remains predictable.
-* **RAII & Type-Safe Slicing:** Uses `MEMORY_BLOCK` ownership to prevent leaks and `MEMORY_SLICE` views to provide bounded access to allocated segments, combining raw speed with modern C++ safety patterns.
-* **Deterministic Resource Management:** Provides a "Zero-Jitter" environment. By eliminating the search-and-fit overhead of standard allocators, you achieve consistent, $O(1)$ allocation latency.
+**MEMORY_BLOCK** is a minimal RAII wrapper around a single heap allocation. Allocates on 
+construction, frees on destruction. Useful anywhere you want a scoped, non-copyable heap 
+buffer without pulling in smart pointers.
 
----
+**MEMORY_SLICE** is a lightweight non-owning view into any region of memory with a rich 
+utility API; typed access, sub-slicing, bounds checking, bit manipulation, copying, 
+zeroing, and overlap detection. It has no dependency on the allocator that produced it 
+and works equally well with stack memory, global buffers, or anything else.
+
+**MEMORY_POOL** is a linear allocator backed by a `MEMORY_BLOCK`. Hands out memory via 
+pointer increment with typed helpers for single objects and arrays or as a `MEMORY_SLICE`. Useful standalone 
+wherever you need fast, deterministic allocation with a known lifetime.
+
+**FIXED_MEMORY_MANAGER** orchestrates a compile-time fixed collection of pools stored 
+contiguously inside its own footprint. No heap allocation beyond the pools themselves.
+
+**DYNAMIC_MEMORY_MANAGER** manages a fixed number of pool slots at compile time but 
+allows pools to be created and destroyed independently at runtime. Suitable for systems 
+where pool sizes or lifetimes are not known upfront.
+
+**MEMORY_MANAGER** is a thin facade over both managers, providing a single unified 
+interface when you need both fixed and dynamic pools in the same system.
 
 ## Performance and Hardware Optimization
 
-### 1. High-Density Spatial Locality
-Standard allocators scatter objects across the heap, forcing the CPU to jump between disparate memory pages. This system enforces strict data contiguity. By keeping application memory in tight, organized blocks, you maximize **Cache Hit Rates** and significantly reduce **TLB (Translation Lookaside Buffer)** pressure.
+### Cache and Prefetcher Efficiency
+Standard allocators scatter objects across the heap, causing cache misses, TLB pressure, and unpredictable memory access patterns. Because this system serves all allocations from a single contiguous block in sequential order, objects end up side by side in memory. This maximizes cache line utilization, reduces TLB pressure, and gives the CPU's hardware prefetcher a predictable access pattern to work with, keeping the pipeline saturated and avoiding memory stalls.
 
-### 2. Elimination of Cache Line Misses
-Modern CPUs load data in 64-byte lines. When you use the `TakeArray` or sequential `Take<T>` calls, objects are placed side-by-side. Accessing the first object automatically pulls the next several objects into the L1 cache, ensuring the data is ready before the CPU even requests it.
+### Default 8-Byte Alignment
+`TakeSlice` enforces 8-byte alignment on every allocation:
 
-
-
-### 3. Hardware Prefetcher Optimization
-The linear bump-allocation strategy ensures that memory is served in a predictable, sequential fashion. This allows the CPU's hardware prefetcher to anticipate data requirements, keeping the execution pipeline saturated and eliminating costly memory stalls.
-
-### 4. 8-Byte Alignment
-The `TakeSlice` method enforces an 8-byte alignment:
 $$alignedReq = (sizeInBytes + 7) \& \sim 7$$
-This ensures that every allocation is "hot-ready" for the CPU, avoiding the massive performance penalties associated with unaligned memory access and ensuring compatibility with SIMD instructions.
 
----
-
-## Memory Architecture
-
-The system is built on a clear ownership hierarchy:
-
-1. **MEMORY_MANAGER**: Orchestrates multiple pools. Uses templates to ensure contiguous pool storage and compile-time address resolution.
-2. **MEMORY_POOL**: The high-performance Linear Allocator (Memory Arena). Memory is handed out via pointer increments.
-3. **MEMORY_BLOCK**: The RAII owner of the raw heap pointer. Handles the `malloc` and `free` lifecycle.
-4. **MEMORY_SLICE**: A lightweight, non-owning view representing a portion of a block.
-
----
+This ensures every allocation is cache-ready, avoids unaligned access penalties. For stricter alignment requirements (e.g. 16-byte SIMD), use `TakeAlignedSlice`.
 
 ## Technical Specifications
 
 ### Complexity Analysis
-| Operation | Complexity | Description |
+
+| Operation | Complexity | Notes |
 | :--- | :--- | :--- |
-| **Allocation** | $O(1)$ | A single pointer addition and boundary check. |
-| **Deallocation** | N/A | Individual deallocation is not supported. |
-| **Reset** | $O(1)$ | Resets a single integer offset to zero. |
-| **Pool Access** | $O(1)$ | Compile-time indexing via templates. |
+| Allocation | O(1) | Single pointer addition and boundary check |
+| Deallocation | N/A | Individual deallocation is not supported |
+| Reset | O(1) | Resets a single integer offset to zero |
+| Pool Access (compile-time) | O(1) | Direct address baked in at compile time |
+| Pool Access (runtime) | O(1) | Single pointer arithmetic |
+| Active Pool Count | O(1) | Cached counter maintained by create/delete |
 
-### Memory Contiguity
-Unlike many managers that store pointers to pools, `MEMORY_MANAGER<Count>` stores an array of `MEMORY_POOL` objects internally:
-`MEMORY_POOL _Pools[Count];`
-This ensures that even the metadata for your different memory zones is stored contiguously, further reducing the chance of a cache miss when switching between different allocation arenas.
 
----
 
-### Deep Dive: MEMORY_MANAGER Architecture
+## Design Notes
 
-The **MEMORY_MANAGER** is designed to provide zero-overhead orchestration for multiple memory arenas. By leveraging C++ templates and variadic parameter packs, it achieves performance characteristics impossible with standard runtime collections.
+### Thread Safety
+Pools are isolated by design. Each pool owns its own independent block of memory with 
+no shared state between pools, so multiple threads operating on different pools 
+concurrently is naturally safe without any synchronization.
 
-#### 1. In-Place Contiguous Storage
-Most managers store an array of pointers to allocators, which adds a layer of indirection (pointer chasing). In this implementation, the **MEMORY_POOL** objects are stored inline within the manager's memory footprint as a fixed-size array.
+Sharing a single pool across threads is not safe without external locking. The library 
+provides no built-in synchronization, and this is intentional. Thread safety requirements 
+are highly application-specific and imposing locks at the allocator level would add 
+overhead to every allocation regardless of whether concurrency is needed. 
 
-This layout ensures that when the **MEMORY_MANAGER** is loaded into the CPU cache, the metadata for all managed pools (such as their current offsets and block heads) is likely to be loaded in the same cache line. This minimizes latency when application logic switches between different memory zones, such as moving from UI allocation to Physics allocation in a single update loop.
 
-#### 2. Compile-Time Access via Template Indexing
-The manager provides a template-based accessor that eliminates the runtime cost of array indexing. Because the index is a template parameter, it is known during compilation rather than at execution.
+### No Individual Slice Deallocation
+Individual slices cannot be freed. Once a slice is taken from a pool, that memory belongs 
+to the pool until Reset() is called. Reset does not return memory to the OS; it simply 
+resets the internal offset back to zero, making the entire block available for reuse. 
+The underlying allocation lives for the lifetime of the pool.
 
-**Performance Benefits**:
-* **Constant Folding**: The compiler evaluates the memory offset (the size of a `MEMORY_POOL` multiplied by the index) during the compilation phase.
-* **Zero Runtime Lookup**: In the final assembly, the call site does not "search" for the pool. It uses a direct memory address or a fixed offset from the manager's starting pointer baked directly into the CPU instruction.
-* **Static Validation**: A `static_assert` validates the index during the build. Unlike a standard array access that might require a runtime bounds check, this system fails to compile if an invalid index is used, ensuring both safety and speed.
+This is a deliberate tradeoff. The system is designed for workloads where groups of 
+allocations share a lifetime, a frame, a level, a request. When that lifetime ends, 
+reset the pool and reuse the block.
 
-#### 3. Variadic Constructor Expansion
-The manager uses variadic templates to initialize the array of pools. This uses a Braced-Init-List Expansion to unpack the sizes provided in the constructor directly into the array elements. 
+At the pool level, `DYNAMIC_MEMORY_MANAGER` does support creating and destroying entire 
+pools independently at runtime. But within a pool, slices are bump-allocated and live 
+and die together. If you need individual object lifetimes, a different allocator strategy 
+is more appropriate for that data.
 
-This ensures that even the initialization phase is free of temporary allocations, heap fragmentation, or intermediate containers, maintaining the library's strict "Zero-Jitter" philosophy from the moment the manager is instantiated.
 
-#### 4. Comparison of Access Methods
+### Debug vs Release Behavior
+In debug builds, invalid operations assert immediately and loudly. These are programming 
+mistakes and the library treats them as such. The assert is the safety net and the 
+expectation is that correct code never triggers one.
 
-* Template Access (GetPool<0>): Zero lookup cost. Compile-time safety. Resulting assembly is a direct pointer offset.
-* Runtime Access (GetPool(i)): Low cost. Requires pointer arithmetic and a runtime offset calculation.
+In release builds, asserts are stripped and the library trusts the programmer. It does 
+not add runtime overhead to compensate for mistakes that should not exist in correct code. 
+Validation and bounds checking is the caller's responsibility.
 
----
+Where a failure is a legitimate runtime condition rather than a programming mistake, the 
+library will fail gracefully and signal the result in a way the caller cannot ignore. The 
+distinction matters: a mistake that should never happen in correct code gets an assert, 
+a condition outside the caller's control gets a graceful fallback.
 
-## Quick Start
-
-### 1. Initializing the Manager
-The `MEMORY_MANAGER` requires the number of pools as a template argument. Pass the sizes for each pool into the constructor.
-
-```cpp
-#include "memory_manager.h"
-
-// 3 Pools: 1MB Graphics, 512KB Physics, 256KB Audio
-MEMORY_MANAGER<3> EngineMemory(1048576, 524288, 262144);
+The goal of this library is to never throw an exception or produce undefined behavior 
+under correct usage. However, it does not achieve this by spending cycles validating 
+every call at runtime. If the caller does not do their job, exceptions or crashes may 
+occur. That is a feature, not a gap.
